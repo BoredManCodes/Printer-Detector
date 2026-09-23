@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>PrinterDetector</AssemblyName>
+    <Product>Border Tech Solutions - Printer Detector</Product>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lextm.SharpSnmpLib" Version="12.5.5" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\logo.png" />
+  </ItemGroup>
+
+  <!-- App is WinForms-only; strip the WPF-only native renderer assets that the shared
+       Windows Desktop runtime pack bundles regardless (never touched by GDI+/WinForms). -->
+  <Target Name="TrimUnusedWpfAssets" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+        Condition="$([System.String]::Copy('%(FileName)').StartsWith('Presentation'))
+                Or $([System.String]::Copy('%(FileName)').StartsWith('wpfgfx'))
+                Or $([System.String]::Copy('%(FileName)').StartsWith('PenImc'))
+                Or $([System.String]::Copy('%(FileName)').StartsWith('D3DCompiler'))
+                Or '%(FileName)' == 'System.Windows.Presentation'" />
+    </ItemGroup>
+  </Target>
+
+</Project>
