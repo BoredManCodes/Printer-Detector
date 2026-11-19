@@ -121,7 +121,18 @@ public partial class Form1 : Form
         int menuStart = Math.Max(brandLabel.Right, titleLabel.Right) + 32;
         utilitiesBtn.Location = new Point(menuStart, 16);
         header.Controls.Add(utilitiesBtn);
-        int afterUtilities = utilitiesBtn.Right + 8;
+
+        var bundlesBtn = MakeHeaderMenuButton("Bundles  ▾", (s, _) =>
+        {
+            var m = new ContextMenuStrip();
+            m.Items.Add("Save printers to a bundle...", null, (_, _) => ShowBundleDialog(BundleMode.Save));
+            m.Items.Add("Install printers from a bundle...", null, (_, _) => ShowBundleDialog(BundleMode.Install));
+            m.Items.Add("Remove several printers...", null, (_, _) => ShowBundleDialog(BundleMode.Remove));
+            m.Show((Control)s!, new Point(0, ((Control)s!).Height));
+        });
+        bundlesBtn.Location = new Point(utilitiesBtn.Right + 8, 16);
+        header.Controls.Add(bundlesBtn);
+        int afterUtilities = bundlesBtn.Right + 8;
 
         var systemToolsBtn = MakeHeaderMenuButton("System tools  ▾", (s, _) =>
         {

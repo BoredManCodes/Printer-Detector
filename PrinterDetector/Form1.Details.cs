@@ -318,6 +318,7 @@ public partial class Form1
             ("Rename…", ButtonStyle.Outline, (Action)(() => RenamePrinterDialog(printer))),
             ("Comment / location…", ButtonStyle.Outline, () => EditCommentLocationDialog(printer)),
             ("Share / unshare…", ButtonStyle.Outline, () => ShareDialog(printer)),
+            ("Save to bundle…", ButtonStyle.Outline, () => ShowBundleDialog(BundleMode.Save, printer.Name)),
             ("Delete printer…", ButtonStyle.Danger, () => DeletePrinterConfirm(printer)),
         });
 

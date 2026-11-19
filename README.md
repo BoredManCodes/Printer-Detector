@@ -29,6 +29,19 @@ The header has three more entry points:
 
 Spooler, queue & DCA actions need administrator rights.
 
+## Bundles
+
+The **Bundles** menu in the header copies print queues between PCs. Each printer's details panel also has a **Save to bundle** button.
+
+- **Save** writes the ticked queues to `Bundles\<name>` next to the exe: the driver package from the driver store, the port, and the queue's paper size, tray and media weight. Those settings live in the queue's DEVMODE in the registry, not in the print ticket, so they are saved separately. A per-user copy (Printing Preferences) wins over the machine copy (Printing Defaults).
+- **Install** takes a bundle from the picker and adds the ticked queues. It installs the driver with `pnputil`, creates the port, adds the queue, then stops the spooler, writes the saved settings into the registry and starts the spooler again. Queues that already exist are skipped unless **Replace** is ticked. Needs administrator rights.
+- **Remove several printers** deletes the ticked queues. Drivers and ports stay installed.
+- **Inspect selected** shows the decoded paper size, input tray, quality, duplex and media type, the installed options and the print ticket. For a bundle it also lists what an install would change on this PC and compares against a queue of the same name that is already there. Driver-private bytes, where the tray and weight choices of some drivers live, are counted but not decoded.
+
+Port handling on install: a Standard TCP/IP or LPR port is recreated as it was. A vendor port such as EpsonNet Print Port can't be copied, so the printer's address is read from the port and a Standard TCP/IP port named `IP_<address>` (RAW 9100) is created instead. USB and WSD ports can't be created from a bundle, so the queue is added on the `NUL:` placeholder port and the log lists the steps to pick the real port under Printer properties > Ports.
+
+The work is done by the PowerShell scripts in `PrinterDetector/Assets/Scripts`, which are embedded in the exe.
+
 ## Building
 
 Needs the .NET 8 SDK on Windows.
