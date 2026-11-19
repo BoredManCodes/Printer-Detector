@@ -4,3 +4,5 @@ obj/
 .vs/
 claude-design-prompt.md
 .claude/
+*.md
+!README.md
