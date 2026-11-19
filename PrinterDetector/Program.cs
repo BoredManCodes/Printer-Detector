@@ -19,7 +19,7 @@ internal static class Program
         Application.Run(new Form1());
     }
 
-    private static bool IsElevated()
+    internal static bool IsElevated()
     {
         using var identity = WindowsIdentity.GetCurrent();
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);

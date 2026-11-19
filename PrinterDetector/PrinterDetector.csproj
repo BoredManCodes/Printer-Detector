@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\logo.png" />
+    <EmbeddedResource Include="Assets\Scripts\*.ps1" />
   </ItemGroup>
 
   <!-- App is WinForms-only; strip the WPF-only native renderer assets that the shared

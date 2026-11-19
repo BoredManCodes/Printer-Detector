@@ -542,9 +542,9 @@ public partial class Form1
         }
     }
 
-    private void ShowTextDialog(string title, string text)
+    private void ShowTextDialog(string title, string text, int width = 560, int height = 420)
     {
-        var dialog = NewDialog(title, 560, 420, this);
+        var dialog = NewDialog(title, width, height, this);
 
         var box = new TextBox
         {
