@@ -307,6 +307,7 @@ public static class PrinterActions
     public record DiscoveredDevice(string Ip, string Hostname, List<int> OpenPorts);
 
     private static readonly int[] ScanPorts = { 9100, 631, 515 };
+    public static IReadOnlyList<int> ScanPortsList => ScanPorts;
 
     private static List<(IPAddress Local, IPAddress Mask)> GetLocalIPv4Subnets()
     {
@@ -557,5 +558,35 @@ public static class PrinterActions
         if (!File.Exists(DcaConsoleExe))
             throw new InvalidOperationException("EKM console not found - is DCA installed?");
         Process.Start(new ProcessStartInfo(DcaConsoleExe) { UseShellExecute = true });
+    }
+
+    // ---------- VNC remote screen ----------
+
+    private const string VncViewerDownloadUrl = "https://wiki.tpw.com.au/vncviewer.exe";
+    private static readonly string VncViewerCacheDir =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PrinterDetector");
+    private static readonly string VncViewerCachePath = Path.Combine(VncViewerCacheDir, "vncviewer.exe");
+
+    public static bool VncViewerCached => File.Exists(VncViewerCachePath);
+
+    public static async Task EnsureVncViewerDownloadedAsync()
+    {
+        if (File.Exists(VncViewerCachePath)) return;
+
+        Directory.CreateDirectory(VncViewerCacheDir);
+        using var http = new HttpClient();
+        var bytes = await http.GetByteArrayAsync(VncViewerDownloadUrl);
+        await File.WriteAllBytesAsync(VncViewerCachePath, bytes);
+    }
+
+    public static void LaunchVncViewer(string address) =>
+        Process.Start(new ProcessStartInfo(VncViewerCachePath, address) { UseShellExecute = false });
+
+    // ---------- Local network info ----------
+
+    public static string GetLocalIpAddress()
+    {
+        var subnet = GetLocalIPv4Subnets().FirstOrDefault();
+        return subnet.Local?.ToString() ?? "unavailable";
     }
 }
