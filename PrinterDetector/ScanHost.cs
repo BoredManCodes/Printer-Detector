@@ -99,9 +99,137 @@ internal static class ScanHost
         return fallback ?? Environment.MachineName;
     }
 
-    public static Task<string> ConfigureAsync(string folder, string password, IProgress<string>? progress) =>
-        QueueBundles.RunScriptAsync("scan-host.ps1",
-            new[] { "-Folder", folder, "-UserName", UserName, "-ShareName", ShareName },
-            progress,
+    // ---------- Checks run before the script, so problems can be asked about instead of failing halfway ----------
+
+    /// <summary>An existing SMB share. IsFolder is false for printer queues and other non-disk shares.</summary>
+    public sealed record ExistingShare(string Name, string Path, bool IsFolder);
+
+    private static string Wql(string s) => s.Replace("\\", "\\\\").Replace("'", "\\'");
+
+    private static IEnumerable<System.Management.ManagementBaseObject> Query(string wql)
+    {
+        using var searcher = new System.Management.ManagementObjectSearcher(wql);
+        foreach (var o in searcher.Get()) yield return o;
+    }
+
+    /// <summary>The share with this name (Windows compares share names case-insensitively), or null.</summary>
+    public static ExistingShare? FindShare(string name)
+    {
+        foreach (var o in Query($"SELECT Name, Path, Type FROM Win32_Share WHERE Name = '{Wql(name)}'"))
+        {
+            // Type: 0 = disk folder, 1 = print queue, 2 = device, 3 = IPC; the high bit marks admin shares.
+            uint type = Convert.ToUInt32(o["Type"] ?? 0u) & 0x7FFFFFFF;
+            return new ExistingShare((string)o["Name"], (o["Path"] as string ?? "").TrimEnd('\\'), type == 0);
+        }
+        return null;
+    }
+
+    /// <summary>The first free share name of the form Scans2, Scans3 ...</summary>
+    public static string SuggestShareName(string baseName)
+    {
+        for (int i = 2; i < 100; i++)
+            if (FindShare(baseName + i) == null) return baseName + i;
+        return baseName + "_" + Environment.TickCount % 10000;
+    }
+
+    /// <summary>Returns why the share name cannot be used, or null if it can.</summary>
+    public static string? CheckShareName(string name)
+    {
+        if (name.Length == 0) return "Enter a share name.";
+        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^[\w\.\- ]{1,80}$"))
+            return "Use letters, numbers, spaces, dots, dashes or underscores (80 at most).";
+        if (name != name.Trim()) return "The name cannot start or end with a space.";
+        var taken = FindShare(name);
+        if (taken != null) return $"'{taken.Name}' is also taken ({(taken.IsFolder ? taken.Path : "not a folder share")}).";
+        return null;
+    }
+
+    public static string NormalizeFolder(string folder) => Path.GetFullPath(folder).TrimEnd('\\');
+
+    private static bool SameOrUnder(string path, string? root)
+    {
+        if (string.IsNullOrEmpty(root)) return false;
+        root = root.TrimEnd('\\');
+        return path.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Returns why the folder is not suitable for a scan share, or null if it is. Pass a full path.</summary>
+    public static string? CheckFolder(string folder)
+    {
+        if (folder.StartsWith(@"\\")) return "Pick a folder on this PC, not a network path.";
+        if (!Path.IsPathFullyQualified(folder)) return "Enter a full folder path such as C:\\Scans.";
+        string full;
+        try { full = NormalizeFolder(folder); }
+        catch (Exception ex) { return "That folder path is not valid: " + ex.Message; }
+
+        var root = Path.GetPathRoot(full) ?? "";
+        if (full.Length <= 3) return $"Pick a folder, not the whole drive ({root}).";
+        if (File.Exists(full)) return $"{full} is a file, not a folder.";
+
+        var drive = new DriveInfo(root);
+        if (drive.DriveType is DriveType.Network or DriveType.CDRom or DriveType.NoRootDirectory or DriveType.Unknown)
+            return $"Drive {root} is not a local disk on this PC. Pick a folder on a local drive.";
+        if (!drive.IsReady) return $"Drive {root} is not ready.";
+
+        // The scan account gets full control, so keep it away from system folders and whole profiles.
+        foreach (var sys in new[]
+                 {
+                     Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+                 })
+            if (SameOrUnder(full, sys)) return $"{full} is a Windows or program folder. Pick a folder of its own, such as C:\\Scans.";
+
+        var profiles = Path.GetDirectoryName(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        if (profiles != null &&
+            (full.Equals(profiles.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(Path.GetDirectoryName(full), profiles.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+            return "That is a whole user profile. Pick or make a folder inside it instead, such as a Scans folder.";
+
+        foreach (var whole in new[]
+                 {
+                     Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                     Environment.GetEnvironmentVariable("OneDrive"),
+                     Environment.GetEnvironmentVariable("OneDriveCommercial"),
+                     Environment.GetEnvironmentVariable("OneDriveConsumer")
+                 })
+            if (!string.IsNullOrEmpty(whole) && full.Equals(whole.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                return $"Sharing all of {full} would give the scanner access to everything in it. Make a Scans folder inside it instead.";
+
+        return null;
+    }
+
+    public enum AccountState { Missing, Exists, Blocked }
+
+    /// <summary>Whether the scan account can be created, already exists (its password will be reset), or cannot be used, with the reason.</summary>
+    public static (AccountState State, string? Reason) CheckAccount()
+    {
+        var machine = Environment.MachineName;
+        if (UserName.Equals(machine, StringComparison.OrdinalIgnoreCase))
+            return (AccountState.Blocked, $"This PC is called {machine}, the same as the account name '{UserName}'. Windows does not allow that. Rename the PC first.");
+        if (UserName.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase) &&
+            Environment.UserDomainName.Equals(machine, StringComparison.OrdinalIgnoreCase))
+            return (AccountState.Blocked, $"You are signed in as '{UserName}'. Resetting its password would change your own. Sign in with another administrator account.");
+
+        // LocalAccount = TRUE stops WMI asking the domain controller on domain-joined PCs.
+        string q = $"LocalAccount = TRUE AND Name = '{Wql(UserName)}'";
+        if (Query($"SELECT Name FROM Win32_Group WHERE {q}").Any())
+            return (AccountState.Blocked, $"There is a local group called '{UserName}', so an account with that name cannot be made. Rename or remove the group first.");
+        if (Query($"SELECT Name FROM Win32_UserAccount WHERE {q}").Any())
+            return (AccountState.Exists, null);
+        return (AccountState.Missing, null);
+    }
+
+    public static Task<string> ConfigureAsync(string folder, string shareName, string password, bool desktopShortcut, bool quickAccess,
+        IProgress<string>? progress)
+    {
+        var args = new List<string> { "-Folder", folder, "-UserName", UserName, "-ShareName", shareName };
+        if (desktopShortcut) args.Add("-DesktopShortcut");
+        if (quickAccess) args.Add("-QuickAccess");
+        return QueueBundles.RunScriptAsync("scan-host.ps1", args, progress,
             new Dictionary<string, string> { ["SCANHOST_PASSWORD"] = password });
+    }
 }

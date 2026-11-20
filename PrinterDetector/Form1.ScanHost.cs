@@ -12,7 +12,7 @@ public partial class Form1
             return;
         }
 
-        const int W = 620, H = 640;
+        const int W = 620, H = 690;
         var dialog = NewDialog("Configure as network scanning host", W, H, this);
 
         Label Caption(string text, int y) => new()
@@ -32,12 +32,13 @@ public partial class Form1
                    $"  •  switch public networks to private and turn on network discovery\n" +
                    $"  •  turn on SMB file sharing if it is off\n" +
                    $"  •  create (or reset) a local account '{ScanHost.UserName}' whose password never expires\n" +
-                   $"  •  give that account full access to the folder and read / write on a share called '{ScanHost.ShareName}'",
+                   $"  •  give that account full access to the folder and read / write on a share called '{ScanHost.ShareName}'\n" +
+                   $"     (you will be asked for another name if that one is taken)",
             Font = new Font("Segoe UI", 8.75f), ForeColor = Theme.TextMuted, BackColor = Color.White,
-            Location = new Point(20, 44), Size = new Size(W - 40, 84)
+            Location = new Point(20, 44), Size = new Size(W - 40, 100)
         });
 
-        int y = 140;
+        int y = 156;
         dialog.Controls.Add(Caption("SCAN FOLDER (CREATED IF IT DOES NOT EXIST)", y));
         var folderBox = new TextBox
         {
@@ -59,6 +60,13 @@ public partial class Form1
             if (fb.ShowDialog(dialog) == DialogResult.OK) folderBox.Text = fb.SelectedPath;
         };
         y += 58;
+
+        dialog.Controls.Add(Caption("ADD THE FOLDER TO", y));
+        var desktopBox = new CheckBox { Text = "Desktop (shortcut)", AutoSize = true, Checked = true, Location = new Point(20, y + 18), BackColor = Color.White };
+        var quickBox = new CheckBox { Text = "Quick Access in File Explorer", AutoSize = true, Checked = true, Location = new Point(180, y + 18), BackColor = Color.White };
+        dialog.Controls.Add(desktopBox);
+        dialog.Controls.Add(quickBox);
+        y += 50;
 
         dialog.Controls.Add(Caption($"PASSWORD FOR '{ScanHost.UserName.ToUpperInvariant()}'", y));
         var passBox = new TextBox
@@ -114,26 +122,28 @@ public partial class Form1
 
         configure.Click += async (_, _) =>
         {
-            var folder = folderBox.Text.Trim();
-            if (folder.Length == 0 || !Path.IsPathFullyQualified(folder))
-            {
-                problem.Text = "Enter a full folder path such as C:\\Scans.";
-                return;
-            }
+            var folderText = folderBox.Text.Trim();
+            var badFolder = ScanHost.CheckFolder(folderText);
+            if (badFolder != null) { problem.Text = badFolder; return; }
+            var folder = ScanHost.NormalizeFolder(folderText);
             var bad = ScanHost.CheckPassword(passBox.Text);
             if (bad != null) { problem.Text = bad; return; }
             if (passBox.Text != confirmBox.Text) { problem.Text = "The two passwords do not match."; return; }
             problem.Text = "";
+            log.Clear();
+
+            var shareName = ScanHost.ShareName;
+            if (!PreflightScanHost(dialog, log, ref folder, ref shareName)) return;
+            folderBox.Text = folder;
 
             configure.Enabled = browse.Enabled = false;
-            folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = false;
+            folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = desktopBox.Enabled = quickBox.Enabled = false;
             dialog.UseWaitCursor = true;
-            log.Clear();
             bool ready = false;
             var savedPassword = passBox.Text;
             try
             {
-                var output = await ScanHost.ConfigureAsync(folder, passBox.Text, progress);
+                var output = await ScanHost.ConfigureAsync(folder, shareName, passBox.Text, desktopBox.Checked, quickBox.Checked, progress);
                 ready = output.Contains("This PC is ready to receive scans", StringComparison.Ordinal);
             }
             catch (Exception ex)
@@ -147,27 +157,159 @@ public partial class Form1
                     passBox.Clear();
                     confirmBox.Clear();
                     configure.Enabled = browse.Enabled = true;
-                    folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = true;
+                    folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = desktopBox.Enabled = quickBox.Enabled = true;
                     dialog.UseWaitCursor = false;
                 }
             }
 
             if (ready && !dialog.IsDisposed)
-                ShowScannerValuesDialog(dialog, ScanHost.LanAddress(), savedPassword);
+                ShowScannerValuesDialog(dialog, ScanHost.LanAddress(), shareName, savedPassword);
         };
 
         dialog.ShowDialog(this);
     }
 
+    /// <summary>
+    /// Checks the account and share name before anything is changed, asking about the ones that need a decision.
+    /// Returns false if the run should not go ahead. May change the folder or share name to what the user picked.
+    /// </summary>
+    private static bool PreflightScanHost(Form owner, TextBox log, ref string folder, ref string shareName)
+    {
+        try
+        {
+            var (state, reason) = ScanHost.CheckAccount();
+            if (state == ScanHost.AccountState.Blocked)
+            {
+                MessageBox.Show(owner, reason, "Network scanning host", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (state == ScanHost.AccountState.Exists &&
+                MessageBox.Show(owner,
+                    $"A local account called '{ScanHost.UserName}' already exists on this PC.\n\n" +
+                    "Its password will be changed to the one you entered. Any scanner already saving to this PC " +
+                    "with the old password will stop working until it is given the new one.\n\nContinue?",
+                    "Network scanning host", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return false;
+
+            var existing = ScanHost.FindShare(shareName);
+            if (existing != null && !(existing.IsFolder && existing.Path.Equals(folder, StringComparison.OrdinalIgnoreCase)))
+            {
+                var choice = ResolveShareConflict(owner, folder, existing);
+                if (choice == null) return false;
+                (folder, shareName) = choice.Value;
+            }
+        }
+        catch (Exception ex)
+        {
+            // WMI can be broken on some PCs. The script repeats the share check, so carry on and let it report.
+            log.AppendText("Could not check existing accounts and shares first (" + ex.Message + "). Continuing." + Environment.NewLine);
+        }
+        return true;
+    }
+
+    /// <summary>Asks what to do when the share name is already used: save into that share's folder, or pick a new share name.</summary>
+    private static (string Folder, string Share)? ResolveShareConflict(Form owner, string folder, ScanHost.ExistingShare existing)
+    {
+        const int W = 560, H = 330;
+        var dialog = NewDialog("Share name already in use", W, H, owner);
+
+        string? existingProblem = !existing.IsFolder
+            ? "Not available: that share is a printer or device, not a folder."
+            : ScanHost.CheckFolder(existing.Path) is { } why ? "Not available: " + why : null;
+
+        dialog.Controls.Add(new Label
+        {
+            Text = $"The share name '{existing.Name}' is already in use", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+            ForeColor = Theme.TextDark, BackColor = Color.White, Location = new Point(20, 16), AutoSize = true
+        });
+        dialog.Controls.Add(new Label
+        {
+            Text = existing.IsFolder
+                ? $"This PC already shares a different folder as '{existing.Name}':\n{existing.Path}"
+                : $"'{existing.Name}' is already used by a shared printer or device on this PC.",
+            Font = new Font("Segoe UI", 8.75f), ForeColor = Theme.TextMuted, BackColor = Color.White,
+            Location = new Point(20, 44), Size = new Size(W - 40, 36), AutoEllipsis = true
+        });
+
+        var useExisting = new RadioButton
+        {
+            Text = "Save scans into that folder instead", AutoSize = true, Location = new Point(20, 92),
+            BackColor = Color.White, Enabled = existingProblem == null
+        };
+        dialog.Controls.Add(useExisting);
+        dialog.Controls.Add(new Label
+        {
+            Text = existingProblem ?? $"Keeps the share '{existing.Name}' and gives '{ScanHost.UserName}' access to it.",
+            Font = new Font("Segoe UI", 8.5f), ForeColor = existingProblem == null ? Theme.TextFaint : ColorTranslator.FromHtml("#B3261E"),
+            BackColor = Color.White, Location = new Point(38, 114), Size = new Size(W - 58, 34), AutoEllipsis = true
+        });
+
+        var useNew = new RadioButton
+        {
+            Text = "Keep my folder and share it under a different name:", AutoSize = true, Location = new Point(20, 152), BackColor = Color.White
+        };
+        dialog.Controls.Add(useNew);
+        dialog.Controls.Add(new Label
+        {
+            Text = folder, Font = new Font("Segoe UI", 8.5f), ForeColor = Theme.TextFaint, BackColor = Color.White,
+            Location = new Point(38, 174), Size = new Size(W - 58, 18), AutoEllipsis = true
+        });
+        var nameBox = new TextBox
+        {
+            Text = ScanHost.SuggestShareName(ScanHost.ShareName), Location = new Point(38, 196), Size = new Size(240, 26),
+            Font = new Font("Segoe UI", 9.5f), BorderStyle = BorderStyle.FixedSingle
+        };
+        dialog.Controls.Add(nameBox);
+        // Clicking or typing in the name box picks that option (not Enter, which also fires when the dialog first gets focus).
+        nameBox.MouseDown += (_, _) => useNew.Checked = true;
+        nameBox.TextChanged += (_, _) => useNew.Checked = true;
+
+        var problem = new Label
+        {
+            Font = new Font("Segoe UI", 8.5f), ForeColor = ColorTranslator.FromHtml("#B3261E"), BackColor = Color.White,
+            Location = new Point(20, 232), Size = new Size(W - 40, 34)
+        };
+        dialog.Controls.Add(problem);
+
+        if (existingProblem == null) useExisting.Checked = true; else useNew.Checked = true;
+
+        var cancel = new FlatButton { Text = "Cancel", Style = ButtonStyle.Outline, Size = new Size(90, 34), Location = new Point(W - 20 - 90, H - 50) };
+        var ok = new FlatButton { Text = "Continue", Style = ButtonStyle.Primary, Size = new Size(110, 34), Location = new Point(W - 20 - 90 - 12 - 110, H - 50) };
+        dialog.Controls.Add(ok);
+        dialog.Controls.Add(cancel);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+
+        (string, string)? result = null;
+        cancel.Click += (_, _) => dialog.Close();
+        ok.Click += (_, _) =>
+        {
+            if (useExisting.Checked)
+            {
+                result = (existing.Path, existing.Name);
+                dialog.Close();
+                return;
+            }
+            var name = nameBox.Text;
+            var bad = ScanHost.CheckShareName(name);
+            if (bad != null) { problem.Text = bad; nameBox.Focus(); return; }
+            result = (folder, name);
+            dialog.Close();
+        };
+
+        dialog.ShowDialog(owner);
+        return result;
+    }
+
     /// <summary>Shows the values to type into the scanner's web interface, each with a Copy button.</summary>
-    private void ShowScannerValuesDialog(Form owner, string host, string password)
+    private void ShowScannerValuesDialog(Form owner, string host, string shareName, string password)
     {
         const int W = 560;
         var machine = Environment.MachineName;
         var rows = new (string Label, string Value, bool Secret)[]
         {
             ("HOST NAME OR IP ADDRESS", host, false),
-            ("NETWORK FOLDER PATH", $@"\\{host}\{ScanHost.ShareName}", false),
+            ("NETWORK FOLDER PATH", $@"\\{host}\{shareName}", false),
             ("USER NAME", ScanHost.UserName, false),
             ("PASSWORD", password, true),
         };
@@ -227,7 +369,7 @@ public partial class Form1
         dialog.Controls.Add(new Label
         {
             Text = $"If the scanner rejects the user name, try {machine}\\{ScanHost.UserName}. " +
-                   $"Some models ask for the share name ({ScanHost.ShareName}) and the host separately.",
+                   $"Some models ask for the share name ({shareName}) and the host separately.",
             Font = new Font("Segoe UI", 8.5f), ForeColor = Theme.TextMuted, BackColor = Color.White,
             Location = new Point(20, y + 4), Size = new Size(W - 40, 36)
         });
