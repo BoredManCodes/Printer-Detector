@@ -116,6 +116,8 @@ public partial class Form1 : Form
             var m = new ContextMenuStrip();
             m.Items.Add("Install EKM", null, (_, _) => ShowInstallDcaDialog());
             m.Items.Add("EKM Status", null, (_, _) => ShowDcaStatusDialog());
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("Configure as network scanning host...", null, (_, _) => ShowScanHostDialog());
             m.Show((Control)s!, new Point(0, ((Control)s!).Height));
         });
         int menuStart = Math.Max(brandLabel.Right, titleLabel.Right) + 32;

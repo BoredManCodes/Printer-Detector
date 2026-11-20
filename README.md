@@ -27,7 +27,17 @@ The header has three more entry points:
 - **System tools** opens the Add Printer wizard, Devices and Printers, Print Management, Device Manager, Services, Event Viewer or the spool folder, and exports the printer list to CSV.
 - **Utilities** installs the EKM Insight DCA toner-monitoring agent silently from a pasted license key, and shows its license status.
 
-Spooler, queue & DCA actions need administrator rights.
+**Utilities > Configure as network scanning host** sets the PC up to receive scans from a network scanner. Pick a folder (created if missing) and a password, and it:
+
+- switches public networks to private and turns on network discovery
+- turns on SMB 2/3 file sharing if it is off, and allows File and Printer Sharing through the firewall
+- creates a local account `Scans` (or resets its password if it exists) with a password that never expires
+- gives `Scans` full control of the folder and read / write on a share called `Scans`
+- prints the host, share path and user name to enter on the scanner
+
+The password must be at least 8 characters, mix letters with numbers or symbols, and not be a common one (`password`, `12345678`, `Password1!`, runs like `abcdefgh`, anything containing `Scans` or the PC name). It is passed to the script through an environment variable, never on the command line or in the log. SMB 1 is left off; a very old scanner that only speaks SMB 1 will not connect.
+
+Spooler, queue, DCA & scanning host actions need administrator rights.
 
 ## Bundles
 

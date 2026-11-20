@@ -85,7 +85,8 @@ internal static class QueueBundles
         return path;
     }
 
-    private static async Task<string> RunScriptAsync(string script, IEnumerable<string> args, IProgress<string>? progress)
+    internal static async Task<string> RunScriptAsync(string script, IEnumerable<string> args, IProgress<string>? progress,
+        IReadOnlyDictionary<string, string>? env = null)
     {
         var psi = new ProcessStartInfo("powershell.exe")
         {
@@ -98,6 +99,7 @@ internal static class QueueBundles
         };
         foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ExtractScript(script) }) psi.ArgumentList.Add(a);
         foreach (var a in args) psi.ArgumentList.Add(a);
+        if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
 
         var sb = new StringBuilder();
         void Line(string? l)
