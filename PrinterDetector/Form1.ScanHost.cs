@@ -130,6 +130,7 @@ public partial class Form1
             dialog.UseWaitCursor = true;
             log.Clear();
             bool ready = false;
+            var savedPassword = passBox.Text;
             try
             {
                 var output = await ScanHost.ConfigureAsync(folder, passBox.Text, progress);
@@ -152,16 +153,87 @@ public partial class Form1
             }
 
             if (ready && !dialog.IsDisposed)
-            {
-                MessageBox.Show(dialog,
-                    $"Save this password somewhere safe now, such as a password manager.\n\n" +
-                    $"Account:  {Environment.MachineName}\\{ScanHost.UserName}\n" +
-                    $"Share:  \\\\{Environment.MachineName}\\{ScanHost.ShareName}\n\n" +
-                    "It is not stored anywhere on this PC, and the scanner needs it. If it is lost, run this again to set a new one and update the scanner.",
-                    "Save the password", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+                ShowScannerValuesDialog(dialog, ScanHost.LanAddress(), savedPassword);
         };
 
         dialog.ShowDialog(this);
+    }
+
+    /// <summary>Shows the values to type into the scanner's web interface, each with a Copy button.</summary>
+    private void ShowScannerValuesDialog(Form owner, string host, string password)
+    {
+        const int W = 560;
+        var machine = Environment.MachineName;
+        var rows = new (string Label, string Value, bool Secret)[]
+        {
+            ("HOST NAME OR IP ADDRESS", host, false),
+            ("NETWORK FOLDER PATH", $@"\\{host}\{ScanHost.ShareName}", false),
+            ("USER NAME", ScanHost.UserName, false),
+            ("PASSWORD", password, true),
+        };
+        int H = 150 + rows.Length * 58 + 90;
+        var dialog = NewDialog("Scanner settings", W, H, owner);
+
+        dialog.Controls.Add(new Label
+        {
+            Text = "Enter these on the scanner's web interface", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+            ForeColor = Theme.TextDark, BackColor = Color.White, Location = new Point(20, 16), AutoSize = true
+        });
+        dialog.Controls.Add(new Label
+        {
+            Text = "Save the password somewhere safe now, such as a password manager. It is not stored on this PC, " +
+                   "and if it is lost you will need to run this again and update the scanner.",
+            Font = new Font("Segoe UI", 8.75f), ForeColor = ColorTranslator.FromHtml("#B3261E"), BackColor = Color.White,
+            Location = new Point(20, 44), Size = new Size(W - 40, 52)
+        });
+
+        int y = 104;
+        foreach (var (label, value, secret) in rows)
+        {
+            dialog.Controls.Add(new Label
+            {
+                Text = label, Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = Theme.TextFaint,
+                BackColor = Color.White, Location = new Point(20, y), AutoSize = true
+            });
+            var box = new TextBox
+            {
+                Text = value, ReadOnly = true, Location = new Point(20, y + 18), Size = new Size(W - 40 - 160, 26),
+                Font = Theme.FontMono, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.White,
+                UseSystemPasswordChar = secret
+            };
+            dialog.Controls.Add(box);
+            int x = W - 20 - 150;
+            if (secret)
+            {
+                var show = new FlatButton { Text = "Show", Style = ButtonStyle.Outline, Size = new Size(70, 28), Location = new Point(x, y + 17) };
+                show.Click += (_, _) =>
+                {
+                    box.UseSystemPasswordChar = !box.UseSystemPasswordChar;
+                    show.Text = box.UseSystemPasswordChar ? "Show" : "Hide";
+                };
+                dialog.Controls.Add(show);
+                x += 78;
+            }
+            var copy = new FlatButton { Text = "Copy", Style = ButtonStyle.Primary, Size = new Size(70, 28), Location = new Point(x, y + 17) };
+            copy.Click += (_, _) =>
+            {
+                try { Clipboard.SetText(value); copy.Text = "Copied"; }
+                catch (Exception ex) { MessageBox.Show(dialog, "Could not copy: " + ex.Message, "Scanner settings"); }
+            };
+            dialog.Controls.Add(copy);
+            y += 58;
+        }
+
+        dialog.Controls.Add(new Label
+        {
+            Text = $"If the scanner rejects the user name, try {machine}\\{ScanHost.UserName}. " +
+                   $"Some models ask for the share name ({ScanHost.ShareName}) and the host separately.",
+            Font = new Font("Segoe UI", 8.5f), ForeColor = Theme.TextMuted, BackColor = Color.White,
+            Location = new Point(20, y + 4), Size = new Size(W - 40, 36)
+        });
+        var close = new FlatButton { Text = "Close", Style = ButtonStyle.Primary, Size = new Size(90, 34), Location = new Point(W - 20 - 90, H - 50) };
+        close.Click += (_, _) => dialog.Close();
+        dialog.Controls.Add(close);
+        dialog.ShowDialog(owner);
     }
 }

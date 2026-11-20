@@ -76,6 +76,29 @@ internal static class ScanHost
         return true;
     }
 
+    /// <summary>The PC's LAN address: the IPv4 on an adapter that has a default gateway, else the first usable one, else the PC name.</summary>
+    public static string LanAddress()
+    {
+        string? fallback = null;
+        foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up ||
+                nic.NetworkInterfaceType is System.Net.NetworkInformation.NetworkInterfaceType.Loopback
+                    or System.Net.NetworkInformation.NetworkInterfaceType.Tunnel) continue;
+            var props = nic.GetIPProperties();
+            var ip = props.UnicastAddresses
+                .Select(a => a.Address)
+                .FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                                     !a.ToString().StartsWith("169.254."));
+            if (ip == null) continue;
+            bool hasGateway = props.GatewayAddresses.Any(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                                                              !g.Address.Equals(System.Net.IPAddress.Any));
+            if (hasGateway) return ip.ToString();
+            fallback ??= ip.ToString();
+        }
+        return fallback ?? Environment.MachineName;
+    }
+
     public static Task<string> ConfigureAsync(string folder, string password, IProgress<string>? progress) =>
         QueueBundles.RunScriptAsync("scan-host.ps1",
             new[] { "-Folder", folder, "-UserName", UserName, "-ShareName", ShareName },
