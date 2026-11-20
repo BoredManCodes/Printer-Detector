@@ -129,9 +129,11 @@ public partial class Form1
             folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = false;
             dialog.UseWaitCursor = true;
             log.Clear();
+            bool ready = false;
             try
             {
-                await ScanHost.ConfigureAsync(folder, passBox.Text, progress);
+                var output = await ScanHost.ConfigureAsync(folder, passBox.Text, progress);
+                ready = output.Contains("This PC is ready to receive scans", StringComparison.Ordinal);
             }
             catch (Exception ex)
             {
@@ -147,6 +149,16 @@ public partial class Form1
                     folderBox.Enabled = passBox.Enabled = confirmBox.Enabled = true;
                     dialog.UseWaitCursor = false;
                 }
+            }
+
+            if (ready && !dialog.IsDisposed)
+            {
+                MessageBox.Show(dialog,
+                    $"Save this password somewhere safe now, such as a password manager.\n\n" +
+                    $"Account:  {Environment.MachineName}\\{ScanHost.UserName}\n" +
+                    $"Share:  \\\\{Environment.MachineName}\\{ScanHost.ShareName}\n\n" +
+                    "It is not stored anywhere on this PC, and the scanner needs it. If it is lost, run this again to set a new one and update the scanner.",
+                    "Save the password", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         };
 
